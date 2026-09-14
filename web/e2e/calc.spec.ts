@@ -96,4 +96,21 @@ test.describe('折弯展开复核台（真实联调）', () => {
     );
     await expect(page.getByTestId('general-error')).toHaveCount(0);
   });
+
+  test('1e999 毫米直段加 1 毫米：1 毫米保留在下料长度里', async ({ page }) => {
+    await page.goto('/');
+    await page.getByLabel(/直段 L1/).fill('1e999');
+    await page.getByLabel(/直段 L2/).fill('1');
+    // 默认折弯补偿 5.749114556... → 总长 = 1e999 + 1 + 5.749114556...
+    await page.getByRole('button', { name: '计算下料长度' }).click();
+
+    // 直段合计必须精确保住那 1 毫米
+    await expect(page.getByTestId('segments-total')).toHaveText(
+      `1${'0'.repeat(998)}1`,
+    );
+    // 下料长度：...006.75（1 + 5.749... 都在）
+    await expect(page.getByTestId('blank-length')).toHaveText(
+      `1${'0'.repeat(998)}6.75`,
+    );
+  });
 });

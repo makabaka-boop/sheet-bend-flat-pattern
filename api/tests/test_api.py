@@ -259,8 +259,8 @@ def test_huge_finite_segment_accepted():
     assert data["unrounded_total"] == "1" + "0" * 29 + "1"
 
 
-def test_astronomical_finite_segment_accepted():
-    """整数位远超计算精度的有限直段同样返回下料长度，不得 422。"""
+def test_astronomical_finite_segment_plus_1mm_preserved():
+    """1e999 毫米直段加 1 毫米：1 毫米必须保留，不得 422 也不得丢。"""
     resp = post(
         {
             "segments": ["1e999", "1"],
@@ -270,7 +270,10 @@ def test_astronomical_finite_segment_accepted():
         }
     )
     assert resp.status_code == 200
-    assert resp.json()["blank_length"] == "1" + "0" * 999 + ".00"
+    data = resp.json()
+    assert data["segments_total"] == "1" + "0" * 998 + "1"
+    assert data["unrounded_total"] == "1" + "0" * 998 + "1"
+    assert data["blank_length"] == "1" + "0" * 998 + "1.00"
 
 
 def test_huge_finite_segment_with_allowance():
@@ -288,3 +291,19 @@ def test_huge_finite_segment_with_allowance():
     # 1e30 + 1 + 5.749114556... → ...006.75（ROUND_HALF_UP）
     assert data["blank_length"] == "1" + "0" * 29 + "6.75"
     assert data["bends"][0]["allowance"] == "5.749115"
+
+
+def test_astronomical_segment_with_allowance_tail_preserved():
+    """1e999 直段 + 1 毫米 + 补偿量 5.749...：尾部全部保留。"""
+    resp = post(
+        {
+            "segments": ["1e999", "1"],
+            "bends": [
+                {"angle": 90, "thickness": 2, "inner_radius": 3, "k_factor": 0.33}
+            ],
+        }
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["blank_length"] == "1" + "0" * 998 + "6.75"
+    assert data["bends"][0]["inner_radius_plus_kt"] == "3.66"

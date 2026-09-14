@@ -43,8 +43,9 @@ def test_unrounded_total_is_segments_plus_allowances():
         [make_bend(), make_bend("60", "1.5", "2", "0.4")],
     )
     assert res.segments_total == D("170.5")
+    # 精确求和：在足够精度下计算期望（和为精确值，不丢任何数字）
     with localcontext() as ctx:
-        ctx.prec = 50
+        ctx.prec = 80
         expected_allowances = +(res.bends[0].allowance + res.bends[1].allowance)
         expected_total = +(res.segments_total + expected_allowances)
     assert res.allowances_total == expected_allowances
@@ -113,11 +114,32 @@ def test_huge_finite_segment_returns_blank_length():
     assert format(res.blank_length, "f") == "1" + "0" * 29 + "1.00"
 
 
-def test_huge_finite_segment_beyond_default_precision():
-    """整数位远超 50 位精度的巨大有限直段也能返回下料长度。"""
+def test_huge_finite_segment_plus_1mm_is_preserved():
+    """1e999 毫米直段再加 1 毫米：这 1 毫米必须保留在下料长度里。"""
     res = calculate([D("1e999"), D("1")], [make_bend("90", "2", "0", "0")])
-    # 50 位中间精度下 +1 被舍去，总长 ≈ 1e999，下料长度正常给出
-    assert format(res.blank_length, "f") == "1" + "0" * 999 + ".00"
+    # 精确求和：1000...001（共 1000 位）
+    assert res.unrounded_total == D("1" + "0" * 998 + "1")
+    assert format(res.blank_length, "f") == "1" + "0" * 998 + "1.00"
+
+
+def test_huge_segment_plus_small_allowance_both_preserved():
+    """巨大直段与微小补偿量相加时，两者都必须保留。"""
+    res = calculate([D("1e999"), D("1")], [make_bend()])  # BA ≈ 5.7491145560693
+    # 未舍入总长 = 1e999 + 1 + 5.749114556... → 下料长度末位 ...006.75
+    assert format(res.blank_length, "f") == "1" + "0" * 998 + "6.75"
+
+
+def test_sum_carry_digit_not_lost():
+    """求和进位产生的新数位不得丢失：999 + 2 = 1001。"""
+    res = calculate([D("999"), D("2")], [make_bend("90", "2", "0", "0")])
+    assert res.unrounded_total == D("1001")
+    assert res.blank_length == D("1001.00")
+
+
+def test_inner_radius_plus_kt_exact_for_huge_radius():
+    """内半径 + K×板厚 为精确计算：1e60 + 0.66 不丢小数部分。"""
+    res = calculate([D("1"), D("1")], [make_bend("90", "2", "1e60", "0.33")])
+    assert res.bends[0].inner_radius_plus_kt == D("1" + "0" * 60 + ".66")
 
 
 def test_huge_inner_radius_allowance_keeps_six_decimals():
