@@ -1,0 +1,30 @@
+services:
+  api:
+    build: ./api
+    ports:
+      # 宿主端口可用 API_PORT 覆盖，默认 8000
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - vinfy:/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  web:
+    build: ./web
+    ports:
+      # 宿主端口可用 WEB_PORT 覆盖，默认 8080
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  vinfy:
+    name: vinfy
