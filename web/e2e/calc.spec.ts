@@ -82,4 +82,18 @@ test.describe('折弯展开复核台（真实联调）', () => {
     await expect(page.locator('#error-segment-0')).toContainText('有限');
     await expect(page.getByTestId('result-panel')).toHaveCount(0);
   });
+
+  test('超大但有限的直段返回对应下料长度', async ({ page }) => {
+    await page.goto('/');
+    await page.getByLabel(/直段 L1/).fill('1e30');
+    await page.getByLabel(/直段 L2/).fill('1');
+    // 默认折弯 90°/板厚2/内半径3/K0.33 → 补偿 5.749114556...
+    await page.getByRole('button', { name: '计算下料长度' }).click();
+
+    // 1e30 + 1 + 5.749114556... → ...006.75（ROUND_HALF_UP 两位）
+    await expect(page.getByTestId('blank-length')).toHaveText(
+      `1${'0'.repeat(29)}6.75`,
+    );
+    await expect(page.getByTestId('general-error')).toHaveCount(0);
+  });
 });

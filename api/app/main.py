@@ -1,7 +1,7 @@
 """FastAPI 入口：展开复核台 API。"""
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, localcontext
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -27,8 +27,14 @@ app.add_middleware(
 
 
 def dec_str(d: Decimal) -> str:
-    """Decimal → 十进制字符串，去掉无意义的尾随零，不使用科学计数法。"""
-    return format(d.normalize(), "f")
+    """Decimal → 十进制字符串，去掉无意义的尾随零，不使用科学计数法。
+
+    normalize 会按当前上下文精度舍入，这里把精度调到系数实际位数，
+    保证任意大的有限数都原样输出、不丢有效数字。
+    """
+    with localcontext() as ctx:
+        ctx.prec = max(28, len(d.as_tuple().digits))
+        return format(d.normalize(), "f")
 
 
 def fixed_str(d: Decimal) -> str:
@@ -97,22 +103,8 @@ def calculate_endpoint(req: CalculateRequest) -> CalculateResponse:
         )
         for b in req.bends
     ]
-    try:
-        result = calculate(req.segments, bends_in)
-    except (InvalidOperation, ValueError, OverflowError):
-        # 数值虽有限但超出可计算范围（如 1e999），按字段级错误处理
-        return JSONResponse(
-            status_code=422,
-            content={
-                "detail": [
-                    {
-                        "field": "body",
-                        "message": "数值超出可计算范围",
-                        "type": "value_error",
-                    }
-                ]
-            },
-        )
+    # 任意大的有限数都能算出结果（舍入精度随数值量级自适应）
+    result = calculate(req.segments, bends_in)
     return CalculateResponse(
         bend_count=len(result.bends),
         segment_count=len(result.segments),

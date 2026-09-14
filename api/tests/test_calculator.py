@@ -103,3 +103,29 @@ def test_decimal_no_float_noise():
     assert res.segments_total == D("0.3")
     assert res.unrounded_total == D("0.3")
     assert res.blank_length == D("0.30")
+
+
+def test_huge_finite_segment_returns_blank_length():
+    """超大但有限的直段必须正常返回下料长度，不得拒绝。"""
+    res = calculate([D("1e30"), D("1")], [make_bend("90", "2", "0", "0")])
+    # 1e30 + 1 = 1000...001（31 位，精度内精确）
+    assert res.unrounded_total == D("1" + "0" * 29 + "1")
+    assert format(res.blank_length, "f") == "1" + "0" * 29 + "1.00"
+
+
+def test_huge_finite_segment_beyond_default_precision():
+    """整数位远超 50 位精度的巨大有限直段也能返回下料长度。"""
+    res = calculate([D("1e999"), D("1")], [make_bend("90", "2", "0", "0")])
+    # 50 位中间精度下 +1 被舍去，总长 ≈ 1e999，下料长度正常给出
+    assert format(res.blank_length, "f") == "1" + "0" * 999 + ".00"
+
+
+def test_huge_inner_radius_allowance_keeps_six_decimals():
+    """巨大内半径的补偿量同样能给出六位明细。"""
+    res = calculate([D("1"), D("1")], [make_bend("90", "2", "1e60", "0")])
+    # BA = π/2 × 1e60 ≈ 1.5707963...e60，六位明细需要 67 位系数
+    q = res.bends[0].allowance_6dp
+    assert q.as_tuple().exponent == -6
+    assert "".join(str(d) for d in q.as_tuple().digits[:8]) == "15707963"
+    # 下料长度照常返回
+    assert res.blank_length > D("1e60")

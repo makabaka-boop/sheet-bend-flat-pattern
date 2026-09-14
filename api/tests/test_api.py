@@ -241,3 +241,50 @@ def test_second_bend_error_has_correct_index():
 
 def test_health():
     assert client.get("/api/health").json() == {"status": "ok"}
+
+
+def test_huge_finite_segment_accepted():
+    """超大但有限的直段（文本框输入以字符串到达）必须返回下料长度。"""
+    resp = post(
+        {
+            "segments": ["1e30", 1],
+            "bends": [
+                {"angle": 90, "thickness": 2, "inner_radius": 0, "k_factor": 0}
+            ],
+        }
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["blank_length"] == "1" + "0" * 29 + "1.00"
+    assert data["unrounded_total"] == "1" + "0" * 29 + "1"
+
+
+def test_astronomical_finite_segment_accepted():
+    """整数位远超计算精度的有限直段同样返回下料长度，不得 422。"""
+    resp = post(
+        {
+            "segments": ["1e999", "1"],
+            "bends": [
+                {"angle": 90, "thickness": 2, "inner_radius": 0, "k_factor": 0}
+            ],
+        }
+    )
+    assert resp.status_code == 200
+    assert resp.json()["blank_length"] == "1" + "0" * 999 + ".00"
+
+
+def test_huge_finite_segment_with_allowance():
+    """超大直段 + 正常补偿量：下料长度 = 大数 + 补偿量，两位舍入正常。"""
+    resp = post(
+        {
+            "segments": ["1e30", 1],
+            "bends": [
+                {"angle": 90, "thickness": 2, "inner_radius": 3, "k_factor": 0.33}
+            ],
+        }
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    # 1e30 + 1 + 5.749114556... → ...006.75（ROUND_HALF_UP）
+    assert data["blank_length"] == "1" + "0" * 29 + "6.75"
+    assert data["bends"][0]["allowance"] == "5.749115"

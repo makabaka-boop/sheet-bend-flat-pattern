@@ -68,6 +68,19 @@ def bend_allowance(
         return +(PI / 180 * angle * (inner_radius + k_factor * thickness))
 
 
+def _quantize_half_up(value: Decimal, quantum: Decimal) -> Decimal:
+    """把 value 按 ROUND_HALF_UP 舍入到 quantum。
+
+    quantize 要求上下文精度不小于结果系数的位数；这里按数值量级
+    自适应提升精度，因此任意大的有限数都能正常舍入，不会被拒绝。
+    """
+    with localcontext() as ctx:
+        ctx.prec = max(
+            CALC_PRECISION, value.adjusted() - quantum.as_tuple().exponent + 1
+        )
+        return value.quantize(quantum, rounding=ROUND_HALF_UP)
+
+
 def calculate(
     segments: Sequence[Decimal], bends: Sequence[BendInput]
 ) -> CalculationResult:
@@ -92,17 +105,13 @@ def calculate(
                     k_factor=b.k_factor,
                     inner_radius_plus_kt=inner_plus_kt,
                     allowance=allowance,
-                    allowance_6dp=allowance.quantize(
-                        DETAIL_QUANTUM, rounding=ROUND_HALF_UP
-                    ),
+                    allowance_6dp=_quantize_half_up(allowance, DETAIL_QUANTUM),
                 )
             )
         segments_total = +sum(segments, Decimal("0"))
         allowances_total = +sum((d.allowance for d in details), Decimal("0"))
         unrounded_total = +(segments_total + allowances_total)
-        blank_length = unrounded_total.quantize(
-            BLANK_QUANTUM, rounding=ROUND_HALF_UP
-        )
+        blank_length = _quantize_half_up(unrounded_total, BLANK_QUANTUM)
         return CalculationResult(
             segments=tuple(segments),
             segments_total=segments_total,
