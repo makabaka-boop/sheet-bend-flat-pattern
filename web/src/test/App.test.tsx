@@ -79,6 +79,21 @@ describe('表单结构', () => {
   });
 });
 
+describe('班次交接草稿入口', () => {
+  it('复用现有标签导航打开草稿，草稿操作不发起服务端请求', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: '班次交接草稿' }));
+    expect(screen.getByTestId('handover-panel')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('班次'), '夜班');
+    await user.clear(screen.getByLabelText('班次'));
+    await user.click(screen.getByTestId('handover-clear'));
+
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
 describe('提交行为', () => {
   it('合法响应渲染逐道代入值、未舍入总长与唯一下料长度', async () => {
     const user = userEvent.setup();

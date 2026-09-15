@@ -51,11 +51,19 @@ h2 {
   color: #52606d;
 }
 
-.field input {
+.field input,
+.field textarea {
   padding: 8px 10px;
   border: 1px solid #9aa5b1;
   border-radius: 6px;
   font-size: 0.95rem;
+  font-family: inherit;
+}
+
+.field textarea {
+  resize: vertical;
+  min-height: 72px;
+  line-height: 1.5;
 }
 
 .field input[aria-invalid='true'] {
@@ -336,4 +344,55 @@ button.link {
 
 .board-note {
   margin-top: 12px;
+}
+
+/* ---------- 班次交接草稿 ---------- */
+
+.handover-card {
+  margin-top: 12px;
+}
+
+.handover-status {
+  border-radius: 8px;
+  border: 1px solid #c7d9f7;
+  background: #eef4ff;
+  color: #334e68;
+  padding: 10px 14px;
+  margin: 12px 0;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.handover-status.saved {
+  border-color: #b7e1c3;
+  background: #e6f6ec;
+  color: #23703b;
+}
+
+.handover-status.unsaved,
+.handover-status.restore-failed {
+  border-color: #f5c6c0;
+  background: #fdecea;
+  color: #b42318;
+}
+
+.handover-fields {
+  display: grid;
+  gap: 14px;
+}
+
+.handover-field {
+  min-width: 0;
+}
+
+.handover-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.handover-local-note {
+  font-size: 0.82rem;
+  color: #52606d;
 }

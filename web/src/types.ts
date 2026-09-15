@@ -64,3 +64,11 @@ export interface BoardSnapshot {
   die_description: string | null;
   claimed_at: string | null;
 }
+
+/** 班次交接草稿：只保存在当前浏览器，不进入服务端。 */
+export interface ShiftHandoverDraft {
+  shift: string;
+  equipmentObservations: string;
+  handledItems: string;
+  todos: string;
+}
