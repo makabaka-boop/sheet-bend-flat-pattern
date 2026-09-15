@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { postCalculate } from './api';
+import ChangeBoardPanel from './components/ChangeBoardPanel';
 import InspectionPanel from './components/InspectionPanel';
 import ResultPanel from './components/ResultPanel';
 import type { BendFormState, CalcResult } from './types';
@@ -15,7 +16,7 @@ const DEFAULT_SEGMENTS = ['100', '50'];
 
 type FieldErrors = Record<string, string>;
 
-type View = 'calc' | 'inspection';
+type View = 'calc' | 'inspection' | 'board';
 
 export default function App() {
   const [view, setView] = useState<View>('calc');
@@ -105,10 +106,21 @@ export default function App() {
         >
           来料抽检
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'board'}
+          className={view === 'board' ? 'tab active' : 'tab'}
+          onClick={() => setView('board')}
+        >
+          换模作业牌
+        </button>
       </nav>
 
       {view === 'inspection' ? (
         <InspectionPanel />
+      ) : view === 'board' ? (
+        <ChangeBoardPanel />
       ) : (
         <>
           <p className="hint">

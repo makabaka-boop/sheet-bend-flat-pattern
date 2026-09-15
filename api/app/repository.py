@@ -1,7 +1,11 @@
-"""抽检记录 SQLite 仓储：数据写入 vinfy 数据卷（容器内挂载到 /data）。
+"""SQLite 仓储：抽检记录与换模作业牌均写入 vinfy 数据卷（容器内挂载到 /data）。
 
 数值一律以十进制文本（TEXT）落库，不经 REAL/float，杜绝精度丢失；
 批次号有唯一约束，重复写入抛 DuplicateBatchError，绝不覆盖原记录。
+
+换模作业牌是同库内的另一张表单例（id 恒为 1），与 inspections 表互不读写；
+认领/归还的裁决由**一条带状态前置条件与修订号的条件 UPDATE** 完成，
+禁止先读后写：条件不命中即裁决失败，再读取胜出快照返回给调用方。
 """
 from __future__ import annotations
 
@@ -11,6 +15,15 @@ import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
+
+from .board import (
+    REASON_ALREADY_OCCUPIED,
+    REASON_HOLDER_MISMATCH,
+    REASON_NOT_OCCUPIED,
+    REASON_REVISION_STALE,
+    STATE_FREE,
+    BoardSnapshot,
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS inspections (
@@ -140,3 +153,162 @@ class InspectionRepository:
             )
             for row in rows
         ]
+
+
+# ---------- 换模作业牌（同库另一张表单例，与 inspections 互不读写） ----------
+
+BOARD_SCHEMA = """
+CREATE TABLE IF NOT EXISTS die_change_board (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    state TEXT NOT NULL CHECK (state IN ('free', 'occupied')),
+    revision INTEGER NOT NULL,
+    holder TEXT,
+    die_description TEXT,
+    claimed_at TEXT
+)
+"""
+
+
+class BoardConflictError(Exception):
+    """条件更新未命中：本次认领/归还未改变作业牌。
+
+    snapshot 为服务端当前（胜出方）快照，reason 为可理解的冲突原因。
+    """
+
+    def __init__(self, reason: str, snapshot: BoardSnapshot):
+        super().__init__(reason)
+        self.reason = reason
+        self.snapshot = snapshot
+
+
+class DieChangeBoardRepository:
+    """换模作业牌单例仓储。每次操作独立连接，线程安全。
+
+    初始化时建表并**补建**单例行（空闲、修订号 0）；服务重启后
+    沿用同一数据库文件，占用状态自然延续。
+    """
+
+    def __init__(self, db_path: str | Path):
+        self._db_path = str(db_path)
+        Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+        with closing(self._connect()) as conn:
+            with conn:
+                conn.execute(BOARD_SCHEMA)
+                # 首次启动补建单例；已存在则整行保持不变（状态跨重启延续）
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO die_change_board
+                        (id, state, revision, holder, die_description, claimed_at)
+                    VALUES (1, 'free', 0, NULL, NULL, NULL)
+                    """
+                )
+
+    def _connect(self) -> sqlite3.Connection:
+        # busy_timeout：并发条件更新排队等锁，而不是立刻报 database is locked
+        conn = sqlite3.connect(self._db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 10000")
+        return conn
+
+    def _snapshot(self, conn: sqlite3.Connection) -> BoardSnapshot:
+        row = conn.execute(
+            """
+            SELECT state, revision, holder, die_description, claimed_at
+            FROM die_change_board WHERE id = 1
+            """
+        ).fetchone()
+        return BoardSnapshot(
+            state=row["state"],
+            revision=row["revision"],
+            holder=row["holder"],
+            die_description=row["die_description"],
+            claimed_at=row["claimed_at"],
+        )
+
+    def get(self) -> BoardSnapshot:
+        """读取作业牌当前状态与修订号（打开页面时用，纯读不做裁决）。"""
+        with closing(self._connect()) as conn:
+            return self._snapshot(conn)
+
+    def claim(
+        self, holder: str, die_description: str, expected_revision: int, claimed_at: str
+    ) -> BoardSnapshot:
+        """认领作业牌：仅当「空闲且修订号相符」时一条条件 UPDATE 完成裁决。
+
+        条件不命中不改变作业牌，抛 BoardConflictError 并携带胜出快照。
+        """
+        with closing(self._connect()) as conn:
+            with conn:
+                cur = conn.execute(
+                    """
+                    UPDATE die_change_board
+                    SET state = 'occupied',
+                        revision = revision + 1,
+                        holder = ?,
+                        die_description = ?,
+                        claimed_at = ?
+                    WHERE id = 1 AND state = ? AND revision = ?
+                    """,
+                    (
+                        holder,
+                        die_description,
+                        claimed_at,
+                        STATE_FREE,
+                        expected_revision,
+                    ),
+                )
+                if cur.rowcount == 1:
+                    return self._snapshot(conn)
+                snapshot = self._snapshot(conn)
+        raise BoardConflictError(self._claim_failure_reason(snapshot), snapshot)
+
+    @staticmethod
+    def _claim_failure_reason(snapshot: BoardSnapshot) -> str:
+        if snapshot.state != STATE_FREE:
+            return REASON_ALREADY_OCCUPIED
+        # 空闲但修订号不符只可能是该行处于异常历史版本；按过期处理
+        return REASON_REVISION_STALE
+
+    def release(
+        self, holder: str, expected_revision: int
+    ) -> BoardSnapshot:
+        """归还作业牌：必须同时满足「占用 + 当前持有人 + 修订号相符」。
+
+        任一条件不符都不改变作业牌；按 状态 → 修订号 → 持有人 的顺序
+        给出可理解的冲突原因。
+        """
+        with closing(self._connect()) as conn:
+            with conn:
+                cur = conn.execute(
+                    """
+                    UPDATE die_change_board
+                    SET state = 'free',
+                        revision = revision + 1,
+                        holder = NULL,
+                        die_description = NULL,
+                        claimed_at = NULL
+                    WHERE id = 1 AND state = 'occupied'
+                      AND revision = ? AND holder = ?
+                    """,
+                    (expected_revision, holder),
+                )
+                if cur.rowcount == 1:
+                    return self._snapshot(conn)
+                snapshot = self._snapshot(conn)
+        raise BoardConflictError(
+            self._release_failure_reason(snapshot, holder, expected_revision),
+            snapshot,
+        )
+
+    @staticmethod
+    def _release_failure_reason(
+        snapshot: BoardSnapshot, holder: str, expected_revision: int
+    ) -> str:
+        # 任一条件不符都不改动作业牌；按 状态 → 修订号 → 持有人 顺序解释原因
+        if snapshot.state == STATE_FREE:
+            return REASON_NOT_OCCUPIED
+        if snapshot.revision != expected_revision:
+            return REASON_REVISION_STALE
+        if snapshot.holder != holder:
+            return REASON_HOLDER_MISMATCH
+        return REASON_REVISION_STALE

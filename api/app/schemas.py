@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -141,3 +141,38 @@ class InspectionResponse(BaseModel):
     measurements: list[MeasurementVerdictOut]
     passed: bool  # 全部实测均在闭区间内才为 True
     created_at: str  # 登记时间（ISO 8601，UTC）
+
+
+# ---------- 换模作业牌（独立于展开结果与抽检记录，互不读写） ----------
+
+# 持有人姓名：去首尾空白后 1~64 字符
+BoardHolderText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)
+]
+
+
+class BoardClaimRequest(BaseModel):
+    """认领作业牌：姓名 + 模具说明 + 打开页面时读到的修订号。"""
+
+    holder: BoardHolderText
+    die_description: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+    ]
+    revision: int = Field(ge=0)
+
+
+class BoardReleaseRequest(BaseModel):
+    """归还作业牌：归还人必须是当前持有人，并提交当前修订号。"""
+
+    holder: BoardHolderText
+    revision: int = Field(ge=0)
+
+
+class BoardSnapshotOut(BaseModel):
+    """作业牌快照：页面始终以服务端快照渲染卡片。"""
+
+    state: Literal["free", "occupied"]
+    revision: int
+    holder: str | None = None
+    die_description: str | None = None
+    claimed_at: str | None = None

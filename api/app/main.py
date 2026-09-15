@@ -13,7 +13,10 @@ from fastapi.responses import JSONResponse
 
 from .calculator import BendInput, calculate
 from .inspection import InspectionVerdict, judge_inspection
+from .board import BoardSnapshot, conflict_message
 from .repository import (
+    BoardConflictError,
+    DieChangeBoardRepository,
     DuplicateBatchError,
     InspectionRecord,
     InspectionRepository,
@@ -21,6 +24,9 @@ from .repository import (
 )
 from .schemas import (
     BendDetailOut,
+    BoardClaimRequest,
+    BoardReleaseRequest,
+    BoardSnapshotOut,
     CalculateRequest,
     CalculateResponse,
     InspectionCreateRequest,
@@ -278,3 +284,84 @@ def create_inspection(
 def recent_inspections(repo: RepoDep, limit: int = 10) -> list[InspectionResponse]:
     """最近登记的抽检记录，新的在前。"""
     return [_record_response(r) for r in repo.recent(limit)]
+
+
+# ---------- 换模作业牌（本机唯一占用协调对象，独立于展开结果与抽检） ----------
+
+_board_repository: DieChangeBoardRepository | None = None
+
+
+def get_board_repository() -> DieChangeBoardRepository:
+    """作业牌仓储单例；与抽检仓储同库但不同表，测试可依赖覆盖。"""
+    global _board_repository
+    if _board_repository is None:
+        _board_repository = DieChangeBoardRepository(default_db_path())
+    return _board_repository
+
+
+BoardRepoDep = Annotated[DieChangeBoardRepository, Depends(get_board_repository)]
+
+
+def _board_response(snapshot: BoardSnapshot) -> BoardSnapshotOut:
+    return BoardSnapshotOut(
+        state=snapshot.state,
+        revision=snapshot.revision,
+        holder=snapshot.holder,
+        die_description=snapshot.die_description,
+        claimed_at=snapshot.claimed_at,
+    )
+
+
+def _conflict_response(err: BoardConflictError) -> JSONResponse:
+    """412 Precondition Failed：裁决未改变作业牌，附带胜出方快照与可理解原因。"""
+    return JSONResponse(
+        status_code=412,
+        content={
+            "detail": [
+                {
+                    "field": "revision",
+                    "message": conflict_message(err.reason, err.snapshot),
+                    "type": err.reason,
+                }
+            ],
+            "snapshot": _board_response(err.snapshot).model_dump(),
+        },
+    )
+
+
+@app.get("/api/change-board", response_model=BoardSnapshotOut)
+def get_change_board(repo: BoardRepoDep) -> BoardSnapshotOut:
+    """读取作业牌空闲/占用状态与递增修订号（打开页面时调用）。"""
+    return _board_response(repo.get())
+
+
+@app.post("/api/change-board/claim", response_model=BoardSnapshotOut)
+def claim_change_board(
+    req: BoardClaimRequest, repo: BoardRepoDep
+) -> BoardSnapshotOut | JSONResponse:
+    """认领作业牌：提交当前修订号，条件更新成功后返回服务端快照。
+
+    同一修订号的并发认领只有一个成功；失败方收到 412 与胜出者快照。
+    """
+    try:
+        snapshot = repo.claim(
+            holder=req.holder,
+            die_description=req.die_description,
+            expected_revision=req.revision,
+            claimed_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except BoardConflictError as err:
+        return _conflict_response(err)
+    return _board_response(snapshot)
+
+
+@app.post("/api/change-board/release", response_model=BoardSnapshotOut)
+def release_change_board(
+    req: BoardReleaseRequest, repo: BoardRepoDep
+) -> BoardSnapshotOut | JSONResponse:
+    """归还作业牌：必须是当前持有人且修订号相符，任一不符都保持占用。"""
+    try:
+        snapshot = repo.release(holder=req.holder, expected_revision=req.revision)
+    except BoardConflictError as err:
+        return _conflict_response(err)
+    return _board_response(snapshot)

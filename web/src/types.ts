@@ -55,3 +55,12 @@ export interface InspectionRecord {
   passed: boolean;
   created_at: string;
 }
+
+/** 换模作业牌快照：页面始终以服务端快照渲染卡片。 */
+export interface BoardSnapshot {
+  state: 'free' | 'occupied';
+  revision: number; // 递增修订号：每次成功的认领/归还 +1
+  holder: string | null;
+  die_description: string | null;
+  claimed_at: string | null;
+}
