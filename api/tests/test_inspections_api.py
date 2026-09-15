@@ -177,6 +177,104 @@ def test_failed_verdict_persisted(client):
     assert rec.passed is False
 
 
+def test_leading_zeros_stored_verbatim(client):
+    """前导零写法：判定按数值进行，落库与接口返回均为填写原文。"""
+    c, repo = client
+    payload = {
+        **VALID_PAYLOAD,
+        "batch_no": "LOT-ZEROS",
+        "nominal": "02.00",
+        "lower_tolerance": "00.05",
+        "upper_tolerance": "0.050",
+        "measurements": ["01.95", "002.00", "2.05"],
+    }
+    resp = post(c, payload)
+    assert resp.status_code == 201
+    data = resp.json()
+    # 判定按解析后的数值：02.00 = 2，01.95 = 下界（闭区间）→ 合格
+    assert data["passed"] is True
+    assert data["lower_bound"] == "1.95"
+    assert data["upper_bound"] == "2.050"  # 2.00 + 0.050，按操作数精度得 3 位小数
+    # 创建响应即为填写原文
+    assert data["nominal"] == "02.00"
+    assert data["lower_tolerance"] == "00.05"
+    assert data["upper_tolerance"] == "0.050"
+    assert [m["value"] for m in data["measurements"]] == ["01.95", "002.00", "2.05"]
+    # 落库原文
+    rec = repo.recent()[0]
+    assert rec.nominal == "02.00"
+    assert rec.lower_tolerance == "00.05"
+    assert rec.upper_tolerance == "0.050"
+    assert rec.measurements == ("01.95", "002.00", "2.05")
+    # 最近记录接口同样返回原文
+    recent = c.get("/api/inspections/recent").json()
+    assert recent[0]["nominal"] == "02.00"
+    assert recent[0]["lower_tolerance"] == "00.05"
+    assert [m["value"] for m in recent[0]["measurements"]] == [
+        "01.95",
+        "002.00",
+        "2.05",
+    ]
+
+
+def test_exponent_notation_stored_verbatim(client):
+    """指数写法：判定按数值进行，落库与接口返回均为填写原文。"""
+    c, repo = client
+    payload = {
+        **VALID_PAYLOAD,
+        "batch_no": "LOT-EXP",
+        "nominal": "2e0",
+        "lower_tolerance": "5e-2",
+        "upper_tolerance": "0.5e-1",
+        "measurements": ["1.95e0", "2.0E0", "0.205e1"],
+    }
+    resp = post(c, payload)
+    assert resp.status_code == 201
+    data = resp.json()
+    # 2e0 = 2，5e-2 = 0.05，0.205e1 = 2.05 = 上界（闭区间）→ 合格
+    assert data["passed"] is True
+    assert data["lower_bound"] == "1.95"
+    assert data["upper_bound"] == "2.05"
+    assert data["nominal"] == "2e0"
+    assert data["lower_tolerance"] == "5e-2"
+    assert data["upper_tolerance"] == "0.5e-1"
+    assert [m["value"] for m in data["measurements"]] == [
+        "1.95e0",
+        "2.0E0",
+        "0.205e1",
+    ]
+    rec = repo.recent()[0]
+    assert rec.nominal == "2e0"
+    assert rec.lower_tolerance == "5e-2"
+    assert rec.upper_tolerance == "0.5e-1"
+    assert rec.measurements == ("1.95e0", "2.0E0", "0.205e1")
+    recent = c.get("/api/inspections/recent").json()
+    assert recent[0]["nominal"] == "2e0"
+    assert [m["value"] for m in recent[0]["measurements"]] == [
+        "1.95e0",
+        "2.0E0",
+        "0.205e1",
+    ]
+
+
+def test_json_numbers_fall_back_to_decimal_text(client):
+    """JSON 数字没有填写原文：按解析后的十进制文本落库（字符串项仍保原文）。"""
+    c, repo = client
+    payload = {
+        **VALID_PAYLOAD,
+        "batch_no": "LOT-NUM",
+        "nominal": 2.0,
+        "measurements": [1.95, "02.0", 2.05],
+    }
+    resp = post(c, payload)
+    assert resp.status_code == 201
+    assert resp.json()["passed"] is True
+    rec = repo.recent()[0]
+    assert rec.nominal == "2.0"
+    # 数字项按解析文本，字符串项保留原文
+    assert rec.measurements == ("1.95", "02.0", "2.05")
+
+
 def test_validation_errors_locate_each_field(client):
     """非法提交：422 且错误定位到批次号 / 标称 / 偏差 / 具体测量项。"""
     c, _ = client

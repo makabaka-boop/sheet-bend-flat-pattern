@@ -2,9 +2,16 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field, StringConstraints, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    StringConstraints,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 # 有限正数（直段、板厚）：> 0 且不允许 NaN / Infinity
 PositiveFiniteDecimal = Annotated[Decimal, Field(gt=0, allow_inf_nan=False)]
@@ -86,6 +93,31 @@ class InspectionCreateRequest(BaseModel):
     lower_tolerance: NonNegativeFiniteDecimal  # 下允许偏差，≥ 0
     upper_tolerance: NonNegativeFiniteDecimal  # 上允许偏差，≥ 0
     measurements: list[FiniteDecimal] = Field(min_length=3)  # 至少三次实测
+    # 填写原文快照（前导零、指数写法等逐字保留），仅供持久化原样落库，
+    # 不参与判定，也不出现在任何响应中
+    raw_text: dict[str, Any] = Field(default_factory=dict, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def snapshot_raw_text(cls, data: Any) -> Any:
+        """快照字符串形式的填写原文（前端文本框始终以字符串提交）。
+
+        JSON 数字的写法在 JSON 解析阶段已丢失，无法快照；落库时
+        对非字符串输入回退为解析后的十进制文本。
+        """
+        if not isinstance(data, dict):
+            return data
+        raw: dict[str, Any] = {}
+        for key in ("nominal", "lower_tolerance", "upper_tolerance"):
+            value = data.get(key)
+            if isinstance(value, str):
+                raw[key] = value
+        measurements = data.get("measurements")
+        if isinstance(measurements, list):
+            raw["measurements"] = [
+                item if isinstance(item, str) else None for item in measurements
+            ]
+        return {**data, "raw_text": raw}
 
 
 class MeasurementVerdictOut(BaseModel):

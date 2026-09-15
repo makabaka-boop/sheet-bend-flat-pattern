@@ -169,20 +169,40 @@ def get_repository() -> InspectionRepository:
 RepoDep = Annotated[InspectionRepository, Depends(get_repository)]
 
 
-def _verdict_snapshot(verdict: InspectionVerdict) -> dict:
-    """判定快照：合格区间与逐项偏差、越界方向（十进制文本）。"""
+def _persist_text(raw_text: dict, key: str, parsed: Decimal) -> str:
+    """落库文本：字符串形式的填写原文逐字保留；非字符串输入回退为十进制文本。"""
+    text = raw_text.get(key)
+    return text if isinstance(text, str) else raw_str(parsed)
+
+
+def _persist_measurement_texts(req: InspectionCreateRequest) -> tuple[str, ...]:
+    """各次实测的落库文本：逐项保留填写原文，非字符串输入回退为十进制文本。"""
+    raw_list = req.raw_text.get("measurements")
+    if not isinstance(raw_list, list):
+        raw_list = []
+    texts: list[str] = []
+    for i, parsed in enumerate(req.measurements):
+        text = raw_list[i] if i < len(raw_list) else None
+        texts.append(text if isinstance(text, str) else raw_str(parsed))
+    return tuple(texts)
+
+
+def _verdict_snapshot(
+    verdict: InspectionVerdict, measurement_texts: tuple[str, ...]
+) -> dict:
+    """判定快照：合格区间与逐项偏差、越界方向；实测值按填写原文记录。"""
     return {
         "lower_bound": raw_str(verdict.lower_bound),
         "upper_bound": raw_str(verdict.upper_bound),
         "measurements": [
             {
                 "index": m.index,
-                "value": raw_str(m.value),
+                "value": measurement_texts[i],
                 "deviation": raw_str(m.deviation),
                 "within": m.within,
                 "direction": m.direction,
             }
-            for m in verdict.measurements
+            for i, m in enumerate(verdict.measurements)
         ],
     }
 
@@ -216,15 +236,23 @@ def create_inspection(
         upper_tolerance=req.upper_tolerance,
         measurements=req.measurements,
     )
+    # 判定按解析后的数值进行；落库按填写原文（前导零、指数写法逐字保留）
+    measurement_texts = _persist_measurement_texts(req)
     record = InspectionRecord(
         batch_no=req.batch_no,
         material=req.material,
-        nominal=raw_str(req.nominal),
-        lower_tolerance=raw_str(req.lower_tolerance),
-        upper_tolerance=raw_str(req.upper_tolerance),
-        measurements=tuple(raw_str(m) for m in req.measurements),
+        nominal=_persist_text(req.raw_text, "nominal", req.nominal),
+        lower_tolerance=_persist_text(
+            req.raw_text, "lower_tolerance", req.lower_tolerance
+        ),
+        upper_tolerance=_persist_text(
+            req.raw_text, "upper_tolerance", req.upper_tolerance
+        ),
+        measurements=measurement_texts,
         passed=verdict.passed,
-        verdict=json.dumps(_verdict_snapshot(verdict), ensure_ascii=False),
+        verdict=json.dumps(
+            _verdict_snapshot(verdict, measurement_texts), ensure_ascii=False
+        ),
         created_at=datetime.now(timezone.utc).isoformat(),
     )
     try:
