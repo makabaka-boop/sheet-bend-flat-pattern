@@ -85,11 +85,19 @@ export default function HandoverPanel() {
   }
 
   function clearAfterHandover() {
-    const nextDraft = { ...EMPTY_HANDOVER_DRAFT };
     const result = handoverStore.clear();
-    setDraft(result.ok ? nextDraft : { ...result.draft });
-    setStatus(result.ok ? 'blank' : 'unsaved');
-    setFailureReason(result.ok ? undefined : result.reason);
+    // 只有空白快照确认写入并切换指针后才清空屏幕；否则保留当前内容，
+    // 避免“屏幕已清空、刷新后旧草稿恢复”的错觉。
+    if (!result.ok) {
+      setStatus('unsaved');
+      setFailureReason(result.reason);
+      setSavedAt(result.savedAt);
+      setGeneration(result.generation);
+      return;
+    }
+    setDraft({ ...EMPTY_HANDOVER_DRAFT });
+    setStatus('blank');
+    setFailureReason(undefined);
     setSavedAt(result.savedAt);
     setGeneration(result.generation);
   }
@@ -104,7 +112,7 @@ export default function HandoverPanel() {
       failureReason === 'unknown-version'
         ? '发现无法识别的草稿格式版本，旧快照未被覆盖；当前无法恢复草稿。'
         : failureReason === 'storage-unavailable'
-          ? '当前浏览器无法访问本地草稿存储，草稿无法恢复；当前保持空白。'
+          ? '当前浏览器无法读取或保存本地草稿，现有交接内容可能恢复失败；屏幕内容已保留。'
           : '两个草稿槽均无法读取，草稿无法恢复；当前保持空白。',
   };
 

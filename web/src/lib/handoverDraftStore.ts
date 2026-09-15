@@ -107,12 +107,16 @@ export function isHandoverDraft(value: unknown): value is ShiftHandoverDraft {
   );
 }
 
-function safeGetStorage(storage: Storage | undefined, key: string): string | null {
-  if (!storage) return null;
+type StorageRead =
+  | { ok: true; value: string | null }
+  | { ok: false };
+
+function readStorage(storage: Storage | undefined, key: string): StorageRead {
+  if (!storage) return { ok: false };
   try {
-    return storage.getItem(key);
+    return { ok: true, value: storage.getItem(key) };
   } catch {
-    return null;
+    return { ok: false };
   }
 }
 
@@ -183,11 +187,18 @@ function parsePointer(raw: string | null): ParsedPointer {
 }
 
 function readSlots(storage: Storage | undefined) {
-  const parsedPointer = parsePointer(safeGetStorage(storage, POINTER_KEY));
+  const pointerRead = readStorage(storage, POINTER_KEY);
+  const slotARead = readStorage(storage, SLOT_A_KEY);
+  const slotBRead = readStorage(storage, SLOT_B_KEY);
+  const readError =
+    !pointerRead.ok || !slotARead.ok || !slotBRead.ok;
+  const parsedPointer = parsePointer(
+    pointerRead.ok ? pointerRead.value : null,
+  );
   const pointer = parsedPointer.kind === 'valid' ? parsedPointer.pointer : null;
-  const a = parseEnvelope(safeGetStorage(storage, SLOT_A_KEY), 'A');
-  const b = parseEnvelope(safeGetStorage(storage, SLOT_B_KEY), 'B');
-  return { parsedPointer, pointer, slots: { A: a, B: b } };
+  const a = parseEnvelope(slotARead.ok ? slotARead.value : null, 'A');
+  const b = parseEnvelope(slotBRead.ok ? slotBRead.value : null, 'B');
+  return { readError, parsedPointer, pointer, slots: { A: a, B: b } };
 }
 
 function highestValid(
@@ -247,7 +258,8 @@ export function createHandoverDraftStore(storage?: Storage | null): HandoverDraf
   return {
     load() {
       if (!backingStore) return failureResult('storage-unavailable');
-      const { parsedPointer, pointer, slots } = readSlots(backingStore);
+      const { readError, parsedPointer, pointer, slots } = readSlots(backingStore);
+      if (readError) return failureResult('storage-unavailable');
 
       if (pointer && slots[pointer.slot].kind === 'valid') {
         const snapshot = slots[pointer.slot] as {
@@ -320,7 +332,18 @@ export function createHandoverDraftStore(storage?: Storage | null): HandoverDraf
         };
       }
 
-      const { parsedPointer, pointer, slots } = readSlots(backingStore);
+      const { readError, parsedPointer, pointer, slots } = readSlots(backingStore);
+      if (readError) {
+        return {
+          ok: false,
+          reason: 'storage-unavailable',
+          draft: { ...draft },
+          status: 'unsaved',
+          generation: 0,
+          savedAt: null,
+          activeSlot: null,
+        };
+      }
       if (parsedPointer.kind === 'unknown') {
         const recovered = highestValid(slots);
         return {
@@ -377,7 +400,19 @@ export function createHandoverDraftStore(storage?: Storage | null): HandoverDraf
       }
 
       const targetKey = target === 'A' ? SLOT_A_KEY : SLOT_B_KEY;
-      const readRaw = safeGetStorage(backingStore, targetKey);
+      const readBackResult = readStorage(backingStore, targetKey);
+      if (!readBackResult.ok) {
+        return {
+          ok: false,
+          reason: 'storage-unavailable',
+          draft: { ...draft },
+          status: 'unsaved',
+          generation: current?.generation ?? 0,
+          savedAt: current?.savedAt ?? null,
+          activeSlot: current?.slot ?? null,
+        };
+      }
+      const readRaw = readBackResult.value;
       const readBack = parseEnvelope(readRaw, target);
       if (readBack.kind !== 'valid' || readRaw !== serialized) {
         return {

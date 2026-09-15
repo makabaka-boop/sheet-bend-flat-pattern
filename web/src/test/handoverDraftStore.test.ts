@@ -219,6 +219,57 @@ describe('班次交接草稿双槽快照存储', () => {
     expect(recovered.draft).toEqual(draft('旧快照'));
   });
 
+  it('浏览器禁止读取草稿时报告恢复失败，而不是把三个键误判为空白', () => {
+    const storage = createMemoryStorage({
+      [HANDOVER_STORAGE_KEYS[0]]: JSON.stringify(slotEnvelope(3, '可能仍存在')),
+      [HANDOVER_STORAGE_KEYS[2]]: JSON.stringify({
+        formatVersion: HANDOVER_FORMAT_VERSION,
+        slot: 'A',
+      }),
+    });
+    const originalGetItem = storage.getItem.bind(storage);
+    storage.getItem = (key: string) => {
+      if ((HANDOVER_STORAGE_KEYS as readonly string[]).includes(key)) {
+        throw new DOMException('Blocked', 'SecurityError');
+      }
+      return originalGetItem(key);
+    };
+
+    const loaded = createHandoverDraftStore(storage).load();
+    expect(loaded.status).toBe('restore-failed');
+    expect(loaded.reason).toBe('storage-unavailable');
+
+    const saveResult = createHandoverDraftStore(storage).save(draft('禁止试探写入'));
+    expect(saveResult.ok).toBe(false);
+    expect(saveResult.reason).toBe('storage-unavailable');
+    expect(originalGetItem(HANDOVER_STORAGE_KEYS[0])).toEqual(
+      JSON.stringify(slotEnvelope(3, '可能仍存在')),
+    );
+  });
+
+  it('浏览器拒绝写入时一键清空失败并回传当前草稿，屏幕可继续保留原内容', () => {
+    const storage = createMemoryStorage({
+      [HANDOVER_STORAGE_KEYS[0]]: JSON.stringify(slotEnvelope(2, '不能被清掉')),
+      [HANDOVER_STORAGE_KEYS[2]]: JSON.stringify({
+        formatVersion: HANDOVER_FORMAT_VERSION,
+        slot: 'A',
+      }),
+    });
+    const originalSetItem = storage.setItem.bind(storage);
+    storage.setItem = (key: string, value: string) => {
+      if (key === HANDOVER_STORAGE_KEYS[1]) throw new DOMException('Quota exceeded');
+      originalSetItem(key, value);
+    };
+
+    const result = createHandoverDraftStore(storage).clear();
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe('unsaved');
+    expect(result.reason).toBe('storage-unavailable');
+
+    const recovered = createHandoverDraftStore(storage).load();
+    expect(recovered.draft).toEqual(draft('不能被清掉'));
+  });
+
   it('槽写入成功但活动指针被拒写时，不认为新槽已确认且仍恢复旧指针内容', () => {
     const storage = createMemoryStorage({
       [HANDOVER_STORAGE_KEYS[0]]: JSON.stringify(slotEnvelope(1, '旧指针')),

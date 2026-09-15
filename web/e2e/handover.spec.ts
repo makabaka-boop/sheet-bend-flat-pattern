@@ -244,6 +244,73 @@ test.describe('班次交接草稿', () => {
     await expect(draftField(page, '班次')).toHaveValue('旧班次');
   });
 
+  test('浏览器禁止读取本地草稿时提示恢复失败，不误报暂无草稿', async ({
+    page,
+  }) => {
+    await seedStorage(page, {
+      [SLOT_A]: envelope(1, {
+        shift: '被浏览器策略隐藏',
+        equipmentObservations: '',
+        handledItems: '',
+        todos: '',
+      }),
+      [POINTER]: { formatVersion: 1, slot: 'A' },
+    });
+    await page.addInitScript(() => {
+      window.localStorage.getItem = () => {
+        throw new DOMException('Blocked', 'SecurityError');
+      };
+    });
+    await page.reload();
+    await page.getByRole('tab', { name: '班次交接草稿' }).click();
+
+    await expect(page.getByTestId('handover-status')).toHaveAttribute(
+      'data-status',
+      'restore-failed',
+    );
+    await expect(page.getByTestId('handover-status')).toContainText(
+      '现有交接内容可能恢复失败',
+    );
+  });
+
+  test('浏览器拒绝写入时点击一键清空不清屏，刷新后仍恢复旧草稿', async ({
+    page,
+  }) => {
+    const oldDraft: Draft = {
+      shift: '旧班次',
+      equipmentObservations: '旧现象',
+      handledItems: '旧处置',
+      todos: '旧待办',
+    };
+    await seedStorage(page, {
+      [SLOT_A]: envelope(2, oldDraft),
+      [POINTER]: { formatVersion: 1, slot: 'A' },
+    });
+
+    await page.addInitScript(() => {
+      const original = window.localStorage.setItem.bind(window.localStorage);
+      window.localStorage.setItem = (key: string, value: string) => {
+        if (key.startsWith('bend-terminal.handover.')) {
+          throw new DOMException('Quota exceeded', 'QuotaExceededError');
+        }
+        return original(key, value);
+      };
+    });
+    await page.reload();
+    await page.getByRole('tab', { name: '班次交接草稿' }).click();
+    await page.getByTestId('handover-clear').click();
+
+    await expectDraft(page, oldDraft);
+    await expect(page.getByTestId('handover-status')).toHaveAttribute(
+      'data-status',
+      'unsaved',
+    );
+
+    await page.reload();
+    await page.getByRole('tab', { name: '班次交接草稿' }).click();
+    await expectDraft(page, oldDraft);
+  });
+
   test('一键清空后重载为空白，且展开复核、来料抽检和换模作业牌不被草稿读写', async ({
     page,
   }) => {

@@ -84,6 +84,53 @@ describe('班次交接草稿面板', () => {
     expect(recovered.draft.shift).toBe('早班');
   });
 
+  it('浏览器禁止读取本地草稿时提示恢复失败，不误报为暂无草稿', () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation((key: string) => {
+      if ((HANDOVER_STORAGE_KEYS as readonly string[]).includes(key)) {
+        throw new DOMException('Blocked', 'SecurityError');
+      }
+      return null;
+    });
+
+    render(<HandoverPanel />);
+    expect(screen.getByTestId('handover-status')).toHaveAttribute(
+      'data-status',
+      'restore-failed',
+    );
+    expect(screen.getByTestId('handover-status')).toHaveTextContent(
+      '现有交接内容可能恢复失败',
+    );
+  });
+
+  it('一键清空确认写入失败时保留屏幕原内容，刷新后旧草稿仍可恢复', async () => {
+    seedDraft({
+      shift: '待口头交接',
+      equipmentObservations: '屏幕不得被清掉',
+      handledItems: '',
+      todos: '',
+    });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key: string) => {
+      if ((HANDOVER_STORAGE_KEYS as readonly string[]).includes(key)) {
+        throw new DOMException('Quota exceeded', 'QuotaExceededError');
+      }
+    });
+
+    const user = userEvent.setup();
+    render(<HandoverPanel />);
+    await user.click(screen.getByTestId('handover-clear'));
+
+    expect(screen.getByLabelText('班次')).toHaveValue('待口头交接');
+    expect(screen.getByLabelText('设备现象')).toHaveValue('屏幕不得被清掉');
+    expect(screen.getByTestId('handover-status')).toHaveAttribute(
+      'data-status',
+      'unsaved',
+    );
+    expect(screen.getByTestId('handover-status')).toHaveTextContent('本次内容尚未保存');
+    expect(createHandoverDraftStore(localStorage).load().draft.shift).toBe(
+      '待口头交接',
+    );
+  });
+
   it('两槽都无法读取时保持空白并提示草稿无法恢复', () => {
     localStorage.setItem(HANDOVER_STORAGE_KEYS[0], 'broken-a');
     localStorage.setItem(HANDOVER_STORAGE_KEYS[1], '{broken-b');
