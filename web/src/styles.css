@@ -191,3 +191,79 @@ button.link {
   font-size: 0.8rem;
   color: #52606d;
 }
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 4px;
+  border-bottom: 1px solid #d9dee4;
+}
+
+.tab {
+  background: none;
+  color: #52606d;
+  border-radius: 6px 6px 0 0;
+  padding: 8px 16px;
+  font-size: 0.95rem;
+  border: 1px solid transparent;
+  border-bottom: none;
+}
+
+.tab.active {
+  color: #0b5cad;
+  background: #fff;
+  border-color: #d9dee4;
+  font-weight: 600;
+}
+
+.inspection-record {
+  border: 1px solid #d9dee4;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 12px 0;
+  background: #fff;
+}
+
+.inspection-record.passed {
+  border-left: 4px solid #2f9e44;
+}
+
+.inspection-record.failed {
+  border-left: 4px solid #d64545;
+}
+
+.inspection-record header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.inspection-record header strong {
+  font-size: 1rem;
+}
+
+.inspection-record header time {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: #7b8794;
+}
+
+.inspection-record .verdict {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.inspection-record .verdict.passed {
+  color: #2f9e44;
+}
+
+.inspection-record .verdict.failed {
+  color: #b42318;
+}
+
+.inspection-record .range {
+  font-size: 0.85rem;
+  color: #52606d;
+  margin: 6px 0 10px;
+}

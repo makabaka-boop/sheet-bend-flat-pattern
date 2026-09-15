@@ -1,18 +1,31 @@
 """FastAPI 入口：展开复核台 API。"""
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from decimal import Decimal, localcontext
+from typing import Annotated
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .calculator import BendInput, calculate
+from .inspection import InspectionVerdict, judge_inspection
+from .repository import (
+    DuplicateBatchError,
+    InspectionRecord,
+    InspectionRepository,
+    default_db_path,
+)
 from .schemas import (
     BendDetailOut,
     CalculateRequest,
     CalculateResponse,
+    InspectionCreateRequest,
+    InspectionResponse,
+    MeasurementVerdictOut,
 )
 
 app = FastAPI(title="折弯展开复核台 API", version="1.0.0")
@@ -42,6 +55,11 @@ def fixed_str(d: Decimal) -> str:
     return format(d, "f")
 
 
+def raw_str(d: Decimal) -> str:
+    """Decimal → 原始十进制文本：保留输入的系数与精度（如 2.00），不 normalize。"""
+    return format(d, "f")
+
+
 def _translate_error(err: dict) -> str:
     """把 Pydantic 错误翻译成面向复核员的中文提示。"""
     etype = err.get("type", "")
@@ -58,6 +76,12 @@ def _translate_error(err: dict) -> str:
         return f"必须小于等于 {ctx.get('le')}"
     if etype == "too_short":
         return f"数量不足：至少需要 {ctx.get('min_length')} 项"
+    if etype == "string_too_short":
+        if ctx.get("min_length") == 1:
+            return "不能为空"
+        return f"长度不足：至少需要 {ctx.get('min_length')} 个字符"
+    if etype == "string_too_long":
+        return f"长度超限：最多 {ctx.get('max_length')} 个字符"
     if etype == "finite_number":
         return "必须为有限数值（不允许 NaN 或 Infinity）"
     if etype in ("decimal_parsing", "decimal_type", "float_parsing", "int_parsing"):
@@ -127,3 +151,102 @@ def calculate_endpoint(req: CalculateRequest) -> CalculateResponse:
         unrounded_total=dec_str(result.unrounded_total),
         blank_length=fixed_str(result.blank_length),
     )
+
+
+# ---------- 来料板厚抽检（独立于展开计算，结论互不影响） ----------
+
+_repository: InspectionRepository | None = None
+
+
+def get_repository() -> InspectionRepository:
+    """抽检仓储单例；测试可用 dependency_overrides 替换为临时库。"""
+    global _repository
+    if _repository is None:
+        _repository = InspectionRepository(default_db_path())
+    return _repository
+
+
+RepoDep = Annotated[InspectionRepository, Depends(get_repository)]
+
+
+def _verdict_snapshot(verdict: InspectionVerdict) -> dict:
+    """判定快照：合格区间与逐项偏差、越界方向（十进制文本）。"""
+    return {
+        "lower_bound": raw_str(verdict.lower_bound),
+        "upper_bound": raw_str(verdict.upper_bound),
+        "measurements": [
+            {
+                "index": m.index,
+                "value": raw_str(m.value),
+                "deviation": raw_str(m.deviation),
+                "within": m.within,
+                "direction": m.direction,
+            }
+            for m in verdict.measurements
+        ],
+    }
+
+
+def _record_response(record: InspectionRecord) -> InspectionResponse:
+    snapshot = json.loads(record.verdict)
+    return InspectionResponse(
+        batch_no=record.batch_no,
+        material=record.material,
+        nominal=record.nominal,
+        lower_tolerance=record.lower_tolerance,
+        upper_tolerance=record.upper_tolerance,
+        lower_bound=snapshot["lower_bound"],
+        upper_bound=snapshot["upper_bound"],
+        measurements=[MeasurementVerdictOut(**m) for m in snapshot["measurements"]],
+        passed=record.passed,
+        created_at=record.created_at,
+    )
+
+
+@app.post("/api/inspections", status_code=201, response_model=InspectionResponse)
+def create_inspection(
+    req: InspectionCreateRequest, repo: RepoDep
+) -> InspectionResponse | JSONResponse:
+    """登记一批来料抽检：判定落库（vinfy 卷），批次号重复返回 409。"""
+    verdict = judge_inspection(
+        batch_no=req.batch_no,
+        material=req.material,
+        nominal=req.nominal,
+        lower_tolerance=req.lower_tolerance,
+        upper_tolerance=req.upper_tolerance,
+        measurements=req.measurements,
+    )
+    record = InspectionRecord(
+        batch_no=req.batch_no,
+        material=req.material,
+        nominal=raw_str(req.nominal),
+        lower_tolerance=raw_str(req.lower_tolerance),
+        upper_tolerance=raw_str(req.upper_tolerance),
+        measurements=tuple(raw_str(m) for m in req.measurements),
+        passed=verdict.passed,
+        verdict=json.dumps(_verdict_snapshot(verdict), ensure_ascii=False),
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    try:
+        repo.insert(record)
+    except DuplicateBatchError:
+        # 重复批次：不覆盖原记录，错误定位到批次号字段
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": [
+                    {
+                        "field": "batch_no",
+                        "message": f"批次号 {req.batch_no} 已存在，不得重复登记",
+                        "type": "duplicate_batch",
+                    }
+                ]
+            },
+        )
+    return _record_response(record)
+
+
+@app.get("/api/inspections/recent", response_model=list[InspectionResponse])
+def recent_inspections(repo: RepoDep, limit: int = 10) -> list[InspectionResponse]:
+    """最近登记的抽检记录，新的在前。"""
+    return [_record_response(r) for r in repo.recent(limit)]

@@ -4,10 +4,21 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Annotated
 
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, Field, StringConstraints, ValidationInfo, field_validator
 
 # 有限正数（直段、板厚）：> 0 且不允许 NaN / Infinity
 PositiveFiniteDecimal = Annotated[Decimal, Field(gt=0, allow_inf_nan=False)]
+
+# 有限十进制数（实测值）：允许越界读数参与判定，只拒绝 NaN / Infinity
+FiniteDecimal = Annotated[Decimal, Field(allow_inf_nan=False)]
+
+# 非负有限十进制数（允许偏差）
+NonNegativeFiniteDecimal = Annotated[Decimal, Field(ge=0, allow_inf_nan=False)]
+
+# 非空文本（批次号、材料牌号）：去首尾空白后至少 1 个字符
+NonEmptyText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)
+]
 
 
 class BendIn(BaseModel):
@@ -61,3 +72,40 @@ class CalculateResponse(BaseModel):
     allowances_total: str
     unrounded_total: str  # 未舍入总长
     blank_length: str  # 唯一的下料长度（ROUND_HALF_UP 两位）
+
+
+# ---------- 来料板厚抽检（独立于展开计算） ----------
+
+
+class InspectionCreateRequest(BaseModel):
+    """来料抽检登记：唯一批次 + 标称板厚 + 上下允许偏差 + 至少三次实测。"""
+
+    batch_no: NonEmptyText  # 唯一批次号
+    material: NonEmptyText  # 材料牌号
+    nominal: PositiveFiniteDecimal  # 标称板厚，> 0
+    lower_tolerance: NonNegativeFiniteDecimal  # 下允许偏差，≥ 0
+    upper_tolerance: NonNegativeFiniteDecimal  # 上允许偏差，≥ 0
+    measurements: list[FiniteDecimal] = Field(min_length=3)  # 至少三次实测
+
+
+class MeasurementVerdictOut(BaseModel):
+    """单次实测的判定明细（字符串以避免精度丢失）。"""
+
+    index: int  # 实测序号，从 1 开始
+    value: str  # 实测值
+    deviation: str  # 偏差 = 实测值 − 标称板厚（带符号）
+    within: bool  # 是否落在闭区间内
+    direction: str  # within 区间内 / above 越上界 / below 越下界
+
+
+class InspectionResponse(BaseModel):
+    batch_no: str
+    material: str
+    nominal: str
+    lower_tolerance: str
+    upper_tolerance: str
+    lower_bound: str  # 合格区间下界（闭区间）
+    upper_bound: str  # 合格区间上界（闭区间）
+    measurements: list[MeasurementVerdictOut]
+    passed: bool  # 全部实测均在闭区间内才为 True
+    created_at: str  # 登记时间（ISO 8601，UTC）

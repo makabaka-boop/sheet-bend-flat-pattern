@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { postCalculate } from './api';
+import InspectionPanel from './components/InspectionPanel';
 import ResultPanel from './components/ResultPanel';
 import type { BendFormState, CalcResult } from './types';
 
@@ -14,7 +15,10 @@ const DEFAULT_SEGMENTS = ['100', '50'];
 
 type FieldErrors = Record<string, string>;
 
+type View = 'calc' | 'inspection';
+
 export default function App() {
+  const [view, setView] = useState<View>('calc');
   const [bends, setBends] = useState<BendFormState[]>([{ ...DEFAULT_BEND }]);
   const [segments, setSegments] = useState<string[]>([...DEFAULT_SEGMENTS]);
   const [result, setResult] = useState<CalcResult | null>(null);
@@ -82,12 +86,37 @@ export default function App() {
   return (
     <main className="page">
       <h1>折弯展开复核台</h1>
-      <p className="hint">
-        补偿量 = π÷180 × 角度 ×（内半径 + K因子 × 板厚）；未舍入总长 = 全部直段 +
-        全部补偿量；下料长度按 ROUND_HALF_UP 保留两位。单位均为 mm。
-      </p>
+      <nav className="tabs" role="tablist" aria-label="视图切换">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'calc'}
+          className={view === 'calc' ? 'tab active' : 'tab'}
+          onClick={() => setView('calc')}
+        >
+          展开复核
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'inspection'}
+          className={view === 'inspection' ? 'tab active' : 'tab'}
+          onClick={() => setView('inspection')}
+        >
+          来料抽检
+        </button>
+      </nav>
 
-      <form onSubmit={onSubmit} noValidate>
+      {view === 'inspection' ? (
+        <InspectionPanel />
+      ) : (
+        <>
+          <p className="hint">
+            补偿量 = π÷180 × 角度 ×（内半径 + K因子 × 板厚）；未舍入总长 = 全部直段 +
+            全部补偿量；下料长度按 ROUND_HALF_UP 保留两位。单位均为 mm。
+          </p>
+
+          <form onSubmit={onSubmit} noValidate>
         <section aria-label="直段输入">
           <h2>
             切点间直段（{segments.length} 段 = 折弯 {bends.length} 道 + 1）
@@ -244,6 +273,8 @@ export default function App() {
       )}
 
       {result && <ResultPanel result={result} />}
+        </>
+      )}
     </main>
   );
 }

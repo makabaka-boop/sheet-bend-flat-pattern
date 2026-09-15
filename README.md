@@ -2,6 +2,17 @@
 
 供折弯机备料复核员使用的展开长度复核工具。图纸上的成品直段**不能直接相加**作为下料长度——每道折弯都要加上补偿量；本工具把折弯参数集中到一处计算，避免不同人员分别处理导致同一零件得到不同尺寸。
 
+页面分两个独立视图：**展开复核**（下料长度计算）与**来料抽检**（板厚抽检登记）。抽检结论不写入、也不改变展开结果。
+
+## 来料板厚抽检
+
+备料员在展开复核前登记来料板厚抽检，避免超差板材流入加工：
+
+- 输入：唯一批次号、材料牌号、标称板厚、上/下允许偏差、至少 3 次实测值。
+- 判定：用 `Decimal` 建立**闭区间** `[标称 − 下偏差, 标称 + 上偏差]`，全部实测值均在区间内才判为合格；恰等于边界的实测值判为合格。响应返回逐项偏差（实测 − 标称）与越界方向（`within` 区间内 / `above` 越上界 / `below` 越下界）。
+- 持久化：批次号、原始十进制文本、判定状态与登记时间写入 SQLite（容器内落在 `vinfy` 卷 `/data/inspections.db`；本地开发 `/data` 不可写时回退 `./data/`，可用环境变量 `INSPECTION_DB_PATH` 或 `INSPECTION_DATA_DIR` 覆盖）。
+- 批次号唯一：重复登记返回 `409`，**不覆盖**原记录；错误定位到 `batch_no` 字段。
+
 ## 计算公式与输入含义
 
 每道折弯的补偿量（bend allowance）：
@@ -36,11 +47,14 @@ BA = π ÷ 180 × 角度 ×（内半径 + K因子 × 板厚）
 ```
 api/            FastAPI + Pydantic + Decimal 计算服务（Python 3.12）
   app/calculator.py   展开计算核心（公式实现）
+  app/inspection.py   抽检判定核心（闭区间、逐项偏差与越界方向）
+  app/repository.py   抽检 SQLite 仓储（写入 vinfy 卷 /data）
   app/schemas.py      请求/响应模型与字段级校验
   app/main.py         路由、字段级错误翻译
-  tests/              pytest：计算与边界
+  tests/              pytest：计算、抽检判定与边界
 web/            React + TypeScript + Vite 复核页面
-  src/App.tsx         表单与提交逻辑（非法提交不清空上一份有效结果）
+  src/App.tsx         视图切换与展开表单（非法提交不清空上一份有效结果）
+  src/components/     ResultPanel（展开结果）、InspectionPanel（来料抽检）
   src/test/           Vitest：表单交互
   e2e/                Playwright：真实联调
 docker-compose.yml
@@ -144,3 +158,44 @@ Compose 内含名为 `vinfy` 的卷（挂载到 API 容器 `/data`）。
 ```
 
 前端收到 422 时只在对应输入框旁展示错误，**不会**用非法提交替换上一份有效结果。
+
+## 抽检 API
+
+`POST /api/inspections` —— 登记一批来料抽检（成功返回 `201`）：
+
+```json
+{
+  "batch_no": "LOT-2026-001",
+  "material": "SPCC",
+  "nominal": "2.0",
+  "lower_tolerance": "0.05",
+  "upper_tolerance": "0.05",
+  "measurements": ["1.95", "2.00", "2.05"]
+}
+```
+
+响应（数值以字符串返回；`direction` 为 `within` / `above` / `below`）：
+
+```json
+{
+  "batch_no": "LOT-2026-001",
+  "material": "SPCC",
+  "nominal": "2.0",
+  "lower_tolerance": "0.05",
+  "upper_tolerance": "0.05",
+  "lower_bound": "1.95",
+  "upper_bound": "2.05",
+  "measurements": [
+    { "index": 1, "value": "1.95", "deviation": "-0.05", "within": true, "direction": "within" },
+    { "index": 2, "value": "2.00", "deviation": "0.00", "within": true, "direction": "within" },
+    { "index": 3, "value": "2.05", "deviation": "0.05", "within": true, "direction": "within" }
+  ],
+  "passed": true,
+  "created_at": "2026-09-15T01:00:00.000000+00:00"
+}
+```
+
+- 批次号重复：返回 `409`，`detail` 结构与 422 相同（`field` 为 `batch_no`），原记录不被覆盖。
+- 字段校验失败：返回 `422`，`field` 定位到 `batch_no` / `nominal` / `measurements.1` 等具体输入项。
+
+`GET /api/inspections/recent?limit=10` —— 最近登记的抽检记录（新的在前），响应为上述对象的数组。

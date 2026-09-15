@@ -32,3 +32,26 @@ export interface CalcResult {
   unrounded_total: string;
   blank_length: string;
 }
+
+/** 单次实测的判定明细（数值为十进制文本）。 */
+export interface MeasurementVerdict {
+  index: number;
+  value: string;
+  deviation: string; // 偏差 = 实测值 − 标称板厚（带符号）
+  within: boolean;
+  direction: 'within' | 'above' | 'below'; // 区间内 / 越上界 / 越下界
+}
+
+/** 一批来料的抽检记录（判定与展开结果互不影响）。 */
+export interface InspectionRecord {
+  batch_no: string;
+  material: string;
+  nominal: string;
+  lower_tolerance: string;
+  upper_tolerance: string;
+  lower_bound: string; // 合格区间下界（闭区间）
+  upper_bound: string; // 合格区间上界（闭区间）
+  measurements: MeasurementVerdict[];
+  passed: boolean;
+  created_at: string;
+}
